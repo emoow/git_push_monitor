@@ -7,6 +7,7 @@ It is designed for one computer. It can track pushes made from this machine acro
 ## Features
 
 - Shows a small floating desktop window with today's Git push usage.
+- Adds a settings button in the desktop window for changing the daily limit.
 - Enforces a daily upload limit before `git push`.
 - Tracks all repositories on this computer that use the global Git hooks path.
 - Lets the user change the daily limit without editing code.
@@ -34,7 +35,18 @@ git config --global core.hooksPath ~/.config/git/hooks
 
 ## Change The Daily Limit
 
-Edit:
+Use the settings button in the desktop monitor window to update:
+
+- Daily limit MB
+- Warn ratio
+
+The new values are saved to:
+
+```sh
+~/.config/git-push-monitor/config
+```
+
+You can also edit that file directly:
 
 ```sh
 ~/.config/git-push-monitor/config
