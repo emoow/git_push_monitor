@@ -1,0 +1,121 @@
+#!/bin/sh
+
+set -eu
+
+config_file="${GIT_PUSH_MONITOR_CONFIG:-$HOME/.config/git-push-monitor/config}"
+state_base="${XDG_STATE_HOME:-$HOME/.local/state}"
+state_dir="$state_base/git-push-monitor"
+today="$(date +%Y-%m-%d)"
+state_file="$state_dir/$today.bytes"
+remote_name="${1:-origin}"
+revs_file="$(mktemp "${TMPDIR:-/tmp}/git-push-monitor.XXXXXX")"
+
+cleanup() {
+  rm -f "$revs_file"
+}
+trap cleanup EXIT
+
+daily_limit_mb="0.99"
+warn_ratio="0.80"
+
+if [ -f "$config_file" ]; then
+  # shellcheck disable=SC1090
+  . "$config_file"
+  daily_limit_mb="${DAILY_LIMIT_MB:-$daily_limit_mb}"
+  warn_ratio="${WARN_RATIO:-$warn_ratio}"
+fi
+
+limit_bytes="$(awk -v mb="$daily_limit_mb" 'BEGIN {
+  if (mb <= 0) exit 1
+  printf "%d", mb * 1048576
+}')"
+
+warn_bytes="$(awk -v limit="$limit_bytes" -v ratio="$warn_ratio" 'BEGIN {
+  if (ratio <= 0 || ratio > 1) ratio = 0.80
+  printf "%d", limit * ratio
+}')"
+
+zero_sha="0000000000000000000000000000000000000000"
+
+while read -r local_ref local_sha remote_ref remote_sha
+do
+  if [ -z "${local_ref:-}" ]; then
+    continue
+  fi
+
+  case "$local_sha" in
+    "$zero_sha")
+      continue
+      ;;
+  esac
+
+  if [ "$remote_sha" = "$zero_sha" ]; then
+    printf '%s\n' "$local_sha" >> "$revs_file"
+    git for-each-ref --format='^%(objectname)' "refs/remotes/$remote_name" >> "$revs_file"
+  else
+    printf '%s\n' "$local_sha" "^$remote_sha" >> "$revs_file"
+  fi
+done
+
+if [ ! -s "$revs_file" ]; then
+  exit 0
+fi
+
+bytes="$(git pack-objects --revs --stdout < "$revs_file" | wc -c | tr -d ' ')"
+current_total=0
+
+if [ -f "$state_file" ]; then
+  current_total="$(cat "$state_file")"
+fi
+
+case "$current_total" in
+  ''|*[!0-9]*)
+    current_total=0
+    ;;
+esac
+
+new_total=$((current_total + bytes))
+
+format_mb() {
+  awk "BEGIN { printf \"%.2f\", $1 / 1048576 }"
+}
+
+bytes_mb="$(format_mb "$bytes")"
+current_mb="$(format_mb "$current_total")"
+new_mb="$(format_mb "$new_total")"
+limit_mb="$(format_mb "$limit_bytes")"
+
+if [ "$new_total" -gt "$limit_bytes" ]; then
+  cat >&2 <<EOF
+Push blocked: today's estimated git push total from this computer would exceed ${limit_mb} MB.
+
+Current today: ${current_mb} MB
+This push:     ${bytes_mb} MB
+After push:    ${new_mb} MB
+
+Change the limit in:
+  ${config_file}
+
+Or intentionally bypass this guard:
+  git push --no-verify
+EOF
+  exit 1
+fi
+
+if [ "$new_total" -ge "$warn_bytes" ]; then
+  cat >&2 <<EOF
+Warning: today's estimated git push total from this computer is close to ${limit_mb} MB.
+
+Current today: ${current_mb} MB
+This push:     ${bytes_mb} MB
+After push:    ${new_mb} MB
+
+Change the limit in:
+  ${config_file}
+EOF
+fi
+
+mkdir -p "$state_dir"
+printf '%s\n' "$new_total" > "$state_file"
+
+exit 0

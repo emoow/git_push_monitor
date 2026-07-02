@@ -1,0 +1,15 @@
+# Git Push Monitor config
+#
+# Change this value to adjust the daily upload limit shown by the desktop
+# monitor and enforced by the pre-push hook.
+#
+# Examples:
+# DAILY_LIMIT_MB=0.99
+# DAILY_LIMIT_MB=5
+# DAILY_LIMIT_MB=25.5
+
+DAILY_LIMIT_MB=0.99
+
+# Warn when usage reaches this ratio of DAILY_LIMIT_MB.
+# 0.80 means warn at 80%.
+WARN_RATIO=0.80
