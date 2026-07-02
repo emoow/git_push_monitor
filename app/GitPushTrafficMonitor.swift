@@ -90,6 +90,12 @@ private func todayStateFile() -> URL {
         .appendingPathComponent("\(formatter.string(from: Date())).bytes")
 }
 
+private func todayProjectsFile() -> URL {
+    todayStateFile()
+        .deletingLastPathComponent()
+        .appendingPathComponent(todayStateFile().deletingPathExtension().lastPathComponent + ".projects.tsv")
+}
+
 private func readTodayBytes() -> Int {
     let file = todayStateFile()
 
@@ -103,6 +109,37 @@ private func readTodayBytes() -> Int {
     return max(0, value)
 }
 
+private struct ProjectUsage {
+    let path: String
+    let name: String
+    let bytes: Int
+}
+
+private func readProjectUsage() -> [ProjectUsage] {
+    let file = todayProjectsFile()
+
+    guard let raw = try? String(contentsOf: file, encoding: .utf8) else {
+        return []
+    }
+
+    return raw.components(separatedBy: .newlines).compactMap { line in
+        let parts = line.components(separatedBy: "\t")
+
+        guard parts.count >= 3, let bytes = Int(parts[2]) else {
+            return nil
+        }
+
+        return ProjectUsage(path: parts[0], name: parts[1], bytes: max(0, bytes))
+    }
+    .sorted { left, right in
+        if left.bytes == right.bytes {
+            return left.name.localizedCaseInsensitiveCompare(right.name) == .orderedAscending
+        }
+
+        return left.bytes > right.bytes
+    }
+}
+
 private func mbString(_ bytes: Int) -> String {
     String(format: "%.2f", Double(bytes) / 1_048_576.0)
 }
@@ -112,8 +149,10 @@ private final class TrafficMonitorView: NSView {
     private let amountLabel = NSTextField(labelWithString: "0.00 / 0.99 MB")
     private let statusLabel = NSTextField(labelWithString: "Today looks clear")
     private let progress = NSProgressIndicator()
+    private let detailsButton = NSButton()
     private let settingsButton = NSButton()
     var onSettingsRequested: (() -> Void)?
+    var onDetailsRequested: ((NSButton) -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -132,6 +171,18 @@ private final class TrafficMonitorView: NSView {
 
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         titleLabel.textColor = .labelColor
+
+        if #available(macOS 11.0, *) {
+            detailsButton.image = NSImage(systemSymbolName: "chevron.down.circle", accessibilityDescription: "Project uploads")
+        } else {
+            detailsButton.title = "More"
+        }
+        detailsButton.bezelStyle = .texturedRounded
+        detailsButton.imagePosition = .imageOnly
+        detailsButton.isBordered = false
+        detailsButton.target = self
+        detailsButton.action = #selector(openDetails)
+        detailsButton.toolTip = "Show today's project uploads"
 
         if #available(macOS 11.0, *) {
             settingsButton.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Settings")
@@ -157,7 +208,7 @@ private final class TrafficMonitorView: NSView {
         progress.controlSize = .small
         progress.style = .bar
 
-        [titleLabel, settingsButton, amountLabel, statusLabel, progress].forEach {
+        [titleLabel, detailsButton, settingsButton, amountLabel, statusLabel, progress].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
             addSubview($0)
         }
@@ -165,7 +216,12 @@ private final class TrafficMonitorView: NSView {
         NSLayoutConstraint.activate([
             titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 18),
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: settingsButton.leadingAnchor, constant: -8),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: detailsButton.leadingAnchor, constant: -8),
+
+            detailsButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            detailsButton.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -4),
+            detailsButton.widthAnchor.constraint(equalToConstant: 26),
+            detailsButton.heightAnchor.constraint(equalToConstant: 26),
 
             settingsButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
             settingsButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
@@ -188,6 +244,10 @@ private final class TrafficMonitorView: NSView {
 
     @objc private func openSettings() {
         onSettingsRequested?()
+    }
+
+    @objc private func openDetails() {
+        onDetailsRequested?(detailsButton)
     }
 
     func refresh() {
@@ -216,6 +276,8 @@ private final class TrafficMonitorView: NSView {
 private final class MonitorApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var panel: NSPanel?
     private var monitorView: TrafficMonitorView?
+    private var settingsPanel: NSPanel?
+    private var settingsSaveTarget: SettingsSaveTarget?
     private var timer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -238,6 +300,9 @@ private final class MonitorApp: NSObject, NSApplicationDelegate, NSWindowDelegat
         let view = TrafficMonitorView(frame: NSRect(origin: .zero, size: size))
         view.onSettingsRequested = { [weak self] in
             self?.showSettings()
+        }
+        view.onDetailsRequested = { [weak self] button in
+            self?.showProjectDetails(from: button)
         }
 
         let panel = NSPanel(
@@ -265,43 +330,100 @@ private final class MonitorApp: NSObject, NSApplicationDelegate, NSWindowDelegat
     }
 
     func windowWillClose(_ notification: Notification) {
-        NSApp.terminate(nil)
+        if notification.object as? NSWindow === panel {
+            NSApp.terminate(nil)
+        }
     }
 
     private func showSettings() {
         let config = readConfig()
-        let alert = NSAlert()
-        alert.messageText = "Git Push Monitor Settings"
-        alert.informativeText = "Update the daily push limit used by both the desktop monitor and the pre-push hook."
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 380, height: 224),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = "Git Push Monitor Settings"
+        panel.isReleasedWhenClosed = false
+        panel.delegate = self
 
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 380, height: 224))
+        let title = NSTextField(labelWithString: "Git Push Monitor Settings")
+        let detail = NSTextField(labelWithString: "These values apply to the desktop monitor and pre-push hook.")
         let limitLabel = NSTextField(labelWithString: "Daily limit MB")
         let limitField = NSTextField(string: String(format: "%.2f", config.dailyLimitMB))
         let warnLabel = NSTextField(labelWithString: "Warn ratio")
         let warnField = NSTextField(string: String(format: "%.2f", config.warnRatio))
+        let saveButton = NSButton(title: "Save", target: nil, action: nil)
+        let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
 
         [limitField, warnField].forEach {
             $0.alignment = .right
             $0.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
         }
 
-        let grid = NSGridView(views: [
-            [limitLabel, limitField],
-            [warnLabel, warnField]
-        ])
-        grid.rowSpacing = 10
-        grid.columnSpacing = 14
-        grid.translatesAutoresizingMaskIntoConstraints = false
-        grid.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        title.font = .systemFont(ofSize: 17, weight: .semibold)
+        detail.font = .systemFont(ofSize: 12, weight: .regular)
+        detail.textColor = .secondaryLabelColor
+        detail.lineBreakMode = .byWordWrapping
 
-        alert.accessoryView = grid
-        NSApp.activate(ignoringOtherApps: true)
-
-        guard alert.runModal() == .alertFirstButtonReturn else {
-            return
+        [title, detail, limitLabel, limitField, warnLabel, warnField, saveButton, cancelButton].forEach {
+            $0.translatesAutoresizingMaskIntoConstraints = false
+            content.addSubview($0)
         }
 
+        saveButton.bezelStyle = .rounded
+        saveButton.keyEquivalent = "\r"
+        cancelButton.bezelStyle = .rounded
+        cancelButton.keyEquivalent = "\u{1b}"
+
+        NSLayoutConstraint.activate([
+            title.topAnchor.constraint(equalTo: content.topAnchor, constant: 22),
+            title.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
+            title.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
+
+            detail.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 8),
+            detail.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            detail.trailingAnchor.constraint(equalTo: title.trailingAnchor),
+
+            limitLabel.topAnchor.constraint(equalTo: detail.bottomAnchor, constant: 24),
+            limitLabel.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            limitField.centerYAnchor.constraint(equalTo: limitLabel.centerYAnchor),
+            limitField.trailingAnchor.constraint(equalTo: title.trailingAnchor),
+            limitField.widthAnchor.constraint(equalToConstant: 112),
+
+            warnLabel.topAnchor.constraint(equalTo: limitLabel.bottomAnchor, constant: 16),
+            warnLabel.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            warnField.centerYAnchor.constraint(equalTo: warnLabel.centerYAnchor),
+            warnField.trailingAnchor.constraint(equalTo: title.trailingAnchor),
+            warnField.widthAnchor.constraint(equalToConstant: 112),
+
+            saveButton.trailingAnchor.constraint(equalTo: title.trailingAnchor),
+            saveButton.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20),
+            saveButton.widthAnchor.constraint(equalToConstant: 82),
+
+            cancelButton.trailingAnchor.constraint(equalTo: saveButton.leadingAnchor, constant: -10),
+            cancelButton.centerYAnchor.constraint(equalTo: saveButton.centerYAnchor),
+            cancelButton.widthAnchor.constraint(equalToConstant: 82)
+        ])
+
+        panel.contentView = content
+        panel.center()
+        NSApp.activate(ignoringOtherApps: true)
+        settingsPanel = panel
+
+        cancelButton.target = self
+        cancelButton.action = #selector(closeSettings)
+        settingsSaveTarget = SettingsSaveTarget { [weak self, weak panel] in
+            self?.saveSettings(limitField: limitField, warnField: warnField, panel: panel)
+        }
+        saveButton.target = settingsSaveTarget
+        saveButton.action = #selector(SettingsSaveTarget.save)
+
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    private func saveSettings(limitField: NSTextField, warnField: NSTextField, panel: NSPanel?) {
         let limit = Double(limitField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines))
         let warn = Double(warnField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines))
 
@@ -319,9 +441,40 @@ private final class MonitorApp: NSObject, NSApplicationDelegate, NSWindowDelegat
         do {
             try writeConfig(MonitorConfig(dailyLimitMB: limit, warnRatio: warn))
             monitorView?.refresh()
+            panel?.close()
         } catch {
             showWriteError(error)
         }
+    }
+
+    @objc private func closeSettings() {
+        settingsPanel?.close()
+    }
+
+    private func showProjectDetails(from button: NSButton) {
+        let usages = readProjectUsage()
+        let menu = NSMenu()
+
+        if usages.isEmpty {
+            let item = NSMenuItem(title: "No project uploads recorded today", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        } else {
+            let total = usages.reduce(0) { $0 + $1.bytes }
+            let titleItem = NSMenuItem(title: "Today by project: \(mbString(total)) MB", action: nil, keyEquivalent: "")
+            titleItem.isEnabled = false
+            menu.addItem(titleItem)
+            menu.addItem(.separator())
+
+            for usage in usages {
+                let item = NSMenuItem(title: "\(usage.name)  \(mbString(usage.bytes)) MB", action: nil, keyEquivalent: "")
+                item.toolTip = usage.path
+                item.isEnabled = false
+                menu.addItem(item)
+            }
+        }
+
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
     }
 
     private func showValidationError() {
@@ -336,6 +489,18 @@ private final class MonitorApp: NSObject, NSApplicationDelegate, NSWindowDelegat
         let alert = NSAlert(error: error)
         alert.messageText = "Could not save settings"
         alert.runModal()
+    }
+}
+
+private final class SettingsSaveTarget: NSObject {
+    private let handler: () -> Void
+
+    init(_ handler: @escaping () -> Void) {
+        self.handler = handler
+    }
+
+    @objc func save() {
+        handler()
     }
 }
 

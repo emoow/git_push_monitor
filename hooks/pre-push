@@ -7,6 +7,7 @@ state_base="${XDG_STATE_HOME:-$HOME/.local/state}"
 state_dir="$state_base/git-push-monitor"
 today="$(date +%Y-%m-%d)"
 state_file="$state_dir/$today.bytes"
+projects_file="$state_dir/$today.projects.tsv"
 remote_name="${1:-origin}"
 revs_file="$(mktemp "${TMPDIR:-/tmp}/git-push-monitor.XXXXXX")"
 
@@ -63,6 +64,8 @@ fi
 
 bytes="$(git pack-objects --revs --stdout < "$revs_file" | wc -c | tr -d ' ')"
 current_total=0
+repo_path="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+project_name="$(basename "$repo_path" | tr '\t' ' ')"
 
 if [ -f "$state_file" ]; then
   current_total="$(cat "$state_file")"
@@ -117,5 +120,25 @@ fi
 
 mkdir -p "$state_dir"
 printf '%s\n' "$new_total" > "$state_file"
+
+awk -v path="$repo_path" -v name="$project_name" -v add="$bytes" '
+BEGIN {
+  FS = OFS = "\t"
+}
+$1 == path {
+  $2 = name
+  $3 = $3 + add
+  seen = 1
+}
+{
+  print
+}
+END {
+  if (!seen) {
+    print path, name, add
+  }
+}
+' "$projects_file" 2>/dev/null > "$projects_file.tmp" || printf '%s\t%s\t%s\n' "$repo_path" "$project_name" "$bytes" > "$projects_file.tmp"
+mv "$projects_file.tmp" "$projects_file"
 
 exit 0

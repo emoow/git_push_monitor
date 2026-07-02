@@ -8,6 +8,7 @@ It is designed for one computer. It can track pushes made from this machine acro
 
 - Shows a small floating desktop window with today's Git push usage.
 - Adds a settings button in the desktop window for changing the daily limit.
+- Adds a details button in the desktop window for today's uploads by project.
 - Enforces a daily upload limit before `git push`.
 - Tracks all repositories on this computer that use the global Git hooks path.
 - Lets the user change the daily limit without editing code.
@@ -26,6 +27,7 @@ The installer writes:
 - Desktop monitor: `~/.local/bin/GitPushTrafficMonitor.swift`
 - LaunchAgent: `~/Library/LaunchAgents/com.emoow.git-push-monitor.plist`
 - Usage history: `~/.local/state/git-push-monitor/YYYY-MM-DD.bytes`
+- Project usage history: `~/.local/state/git-push-monitor/YYYY-MM-DD.projects.tsv`
 
 It also sets:
 
@@ -66,6 +68,12 @@ DAILY_LIMIT_MB=5
 ```
 
 The hook and desktop monitor both read this file.
+
+## View Project Uploads
+
+Click the details button in the desktop monitor window to open a small dropdown of today's uploads by project.
+
+The project list is recorded by the `pre-push` hook. Pushes made before installing this version may only have a total counter, not per-project detail.
 
 ## Uninstall
 
