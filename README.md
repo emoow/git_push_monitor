@@ -7,6 +7,7 @@ It is designed for one computer. It can track pushes made from this machine acro
 ## Features
 
 - Shows a small floating desktop window with today's Git push usage.
+- Adds a refresh button in the desktop window for immediately reloading local usage files.
 - Adds a settings button in the desktop window for changing the daily limit.
 - Adds a details button in the desktop window for today's uploads by project.
 - Enforces a daily upload limit before `git push`.

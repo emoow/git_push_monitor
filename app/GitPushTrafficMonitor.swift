@@ -149,6 +149,7 @@ private final class TrafficMonitorView: NSView {
     private let amountLabel = NSTextField(labelWithString: "0.00 / 0.99 MB")
     private let statusLabel = NSTextField(labelWithString: "Today looks clear")
     private let progress = NSProgressIndicator()
+    private let refreshButton = NSButton()
     private let detailsButton = NSButton()
     private let settingsButton = NSButton()
     var onSettingsRequested: (() -> Void)?
@@ -171,6 +172,18 @@ private final class TrafficMonitorView: NSView {
 
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         titleLabel.textColor = .labelColor
+
+        if #available(macOS 11.0, *) {
+            refreshButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Refresh")
+        } else {
+            refreshButton.title = "Refresh"
+        }
+        refreshButton.bezelStyle = .texturedRounded
+        refreshButton.imagePosition = .imageOnly
+        refreshButton.isBordered = false
+        refreshButton.target = self
+        refreshButton.action = #selector(refreshNow)
+        refreshButton.toolTip = "Refresh usage now"
 
         if #available(macOS 11.0, *) {
             detailsButton.image = NSImage(systemSymbolName: "chevron.down.circle", accessibilityDescription: "Project uploads")
@@ -208,7 +221,7 @@ private final class TrafficMonitorView: NSView {
         progress.controlSize = .small
         progress.style = .bar
 
-        [titleLabel, detailsButton, settingsButton, amountLabel, statusLabel, progress].forEach {
+        [titleLabel, refreshButton, detailsButton, settingsButton, amountLabel, statusLabel, progress].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
             addSubview($0)
         }
@@ -216,7 +229,12 @@ private final class TrafficMonitorView: NSView {
         NSLayoutConstraint.activate([
             titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 18),
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: detailsButton.leadingAnchor, constant: -8),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: refreshButton.leadingAnchor, constant: -8),
+
+            refreshButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            refreshButton.trailingAnchor.constraint(equalTo: detailsButton.leadingAnchor, constant: -4),
+            refreshButton.widthAnchor.constraint(equalToConstant: 26),
+            refreshButton.heightAnchor.constraint(equalToConstant: 26),
 
             detailsButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
             detailsButton.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -4),
@@ -248,6 +266,10 @@ private final class TrafficMonitorView: NSView {
 
     @objc private func openDetails() {
         onDetailsRequested?(detailsButton)
+    }
+
+    @objc private func refreshNow() {
+        refresh()
     }
 
     func refresh() {
@@ -290,7 +312,7 @@ private final class MonitorApp: NSObject, NSApplicationDelegate, NSWindowDelegat
     }
 
     private func showPanel() {
-        let size = NSSize(width: 268, height: 138)
+        let size = NSSize(width: 296, height: 138)
         let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let origin = NSPoint(
             x: screenFrame.maxX - size.width - 22,
